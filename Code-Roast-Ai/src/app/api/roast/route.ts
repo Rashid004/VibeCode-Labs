@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import OpenAI from "openai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 // Instantiated once at module level — reused across warm invocations.
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
 const SUPPORTED_LANGUAGES = [
   "javascript",
@@ -94,23 +92,29 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content: SYSTEM_PROMPT,
-        },
-        {
-          role: "user",
-          content: `Please roast the following ${language} code:\n\n\`\`\`${language}\n${code}\n\`\`\``,
-        },
-      ],
-      temperature: 0.85,
-      max_tokens: 1200,
+    const model = genAI.getGenerativeModel({
+      model: "gemini-2.0-flash",
+      systemInstruction: SYSTEM_PROMPT,
     });
 
-    const roastText = completion.choices[0]?.message?.content;
+    const result = await model.generateContent({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              text: `Please roast the following ${language} code:\n\n\`\`\`${language}\n${code}\n\`\`\``,
+            },
+          ],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.85,
+        maxOutputTokens: 1200,
+      },
+    });
+
+    const roastText = result.response.text();
 
     if (!roastText) {
       return NextResponse.json(
@@ -126,15 +130,15 @@ export async function POST(req: NextRequest) {
   } catch (error: unknown) {
     console.error("[/api/roast] Error:", error);
 
-    // Surface OpenAI-specific errors
-    if (error instanceof OpenAI.APIError) {
-      if (error.status === 429) {
+    // Surface Gemini-specific errors
+    if (error instanceof Error) {
+      if (error.message.includes("429") || error.message.toLowerCase().includes("quota")) {
         return NextResponse.json(
           { error: "Rate limit hit. Please wait a moment and try again." },
           { status: 429 }
         );
       }
-      if (error.status === 401) {
+      if (error.message.includes("401") || error.message.toLowerCase().includes("api key")) {
         return NextResponse.json(
           { error: "API key invalid or missing." },
           { status: 500 }
